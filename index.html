@@ -1,0 +1,323 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>三维坐标系工具</title>
+    <script type="text/javascript" async src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.7/MathJax.js?config=TeX-AMS_HTML"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.134.0/examples/js/controls/OrbitControls.js"></script>
+    <style>
+        body { margin: 0; }
+        #canvas-container {
+            width: 500px;
+            height: 500px;
+            border: 1px solid black;
+            background-color: #ffffff; /* 白色背景 */
+        }
+        #matrixInput {
+            margin-top: 20px;
+        }
+        .matrix-container {
+            display: flex;
+            flex-direction: column;
+        }
+        .matrix-row {
+            display: flex;
+            justify-content: flex-start;
+            margin: 0;
+        }
+        .matrix-row input {
+            width: 50px;
+            margin: 2px;
+        }
+        #vectorsInfo {
+            margin-top: 20px;
+            font-family: Arial, sans-serif;
+        }
+        #inputCoordinates {
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div id="canvas-container"></div>
+    <div id="inputCoordinates">
+        <label>输入向量A坐标:</label>
+        <input type="number" id="inputAx" placeholder="X坐标" />
+        <input type="number" id="inputAy" placeholder="Y坐标" />
+        <input type="number" id="inputAz" placeholder="Z坐标" />
+        <button id="setCoordinates">设置向量A</button>
+    </div>
+    <div id="matrixInput">
+        <label>输入三维矩阵 (H):</label>
+        <div class="matrix-container">
+            <div class="matrix-row">
+                <input type="text" id="matrix11" value="1" />
+                <input type="text" id="matrix12" value="0" />
+                <input type="text" id="matrix13" value="0" />
+            </div>
+            <div class="matrix-row">
+                <input type="text" id="matrix21" value="0" />
+                <input type="text" id="matrix22" value="1" />
+                <input type="text" id="matrix23" value="0" />
+            </div>
+            <div class="matrix-row">
+                <input type="text" id="matrix31" value="0" />
+                <input type="text" id="matrix32" value="0" />
+                <input type="text" id="matrix33" value="1" />
+            </div>
+        </div>
+    </div>
+    <p id="vectorsInfo"></p>
+
+    <script>
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0xffffff); // 白色背景
+        const camera = new THREE.PerspectiveCamera(75, 500 / 500, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true }); // 启用抗锯齿
+        renderer.setSize(500, 500);
+        container.appendChild(renderer.domElement);
+
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+
+        camera.position.set(10, 10, 10);
+        camera.lookAt(0, 0, 0);
+
+        let vectorA = { x: 1, y: 1, z: 1 }; // 初始向量A
+        let matrix = [
+            [-1, 1, 0],
+            [-4, 3, 0],
+            [1, 0, 2]
+        ]; // 默认单位矩阵
+        const scaleFactor = 2; // 缩放因子
+
+        function drawAxes() {
+            scene.children = []; // 清空场景
+
+            // 绘制黑色箭头坐标轴（小箭头）
+            const arrowLength = 10;
+            const arrowColor = 0x000000;
+            const headLength = 0.5; // 小箭头长度
+            const headWidth = 0.3; // 小箭头宽度
+
+            // X轴
+            const xAxis = new THREE.ArrowHelper(
+                new THREE.Vector3(1, 0, 0),
+                new THREE.Vector3(0, 0, 0),
+                arrowLength,
+                arrowColor,
+                headLength,
+                headWidth
+            );
+            scene.add(xAxis);
+
+            // Y轴
+            const yAxis = new THREE.ArrowHelper(
+                new THREE.Vector3(0, 1, 0),
+                new THREE.Vector3(0, 0, 0),
+                arrowLength,
+                arrowColor,
+                headLength,
+                headWidth
+            );
+            scene.add(yAxis);
+
+            // Z轴
+            const zAxis = new THREE.ArrowHelper(
+                new THREE.Vector3(0, 0, 1),
+                new THREE.Vector3(0, 0, 0),
+                arrowLength,
+                arrowColor,
+                headLength,
+                headWidth
+            );
+            scene.add(zAxis);
+
+            // 添加原点O和轴标签
+            const labels = [
+                { text: 'O', position: { x: 0, y: 0, z: 0.5 }, color: 'black' },
+                { text: 'X', position: { x: 11, y: 0, z: 0.5 }, color: 'black' },
+                { text: 'Y', position: { x: 0, y: 11, z: 0.5 }, color: 'black' },
+                { text: 'Z', position: { x: 0, y: 0, z: 11 }, color: 'black' }
+            ];
+            labels.forEach(label => {
+                const spriteMaterial = new THREE.SpriteMaterial({
+                    map: new THREE.CanvasTexture(generateSprite(label.text, label.color)),
+                    transparent: true
+                });
+                const sprite = new THREE.Sprite(spriteMaterial);
+                sprite.position.set(label.position.x, label.position.y, label.position.z);
+                sprite.scale.set(3, 3, 3); // 增大缩放以匹配清晰度
+                scene.add(sprite);
+            });
+        }
+
+        function drawVector(start, end, color, label, coords) {
+            const direction = new THREE.Vector3(end.x - start.x, end.y - start.y, end.z - start.z);
+            const length = direction.length();
+            const arrowHelper = new THREE.ArrowHelper(
+                direction.normalize(),
+                new THREE.Vector3(start.x, start.y, start.z),
+                length,
+                color,
+                0.5, // 小箭头长度
+                0.3  // 小箭头宽度
+            );
+            scene.add(arrowHelper);
+
+            // 添加向量标签（符号+坐标，使用向量颜色）
+            const labelText = `${label} (${coords.x.toFixed(2)}, ${coords.y.toFixed(2)}, ${coords.z.toFixed(2)})`;
+            const spriteMaterial = new THREE.SpriteMaterial({
+                map: new THREE.CanvasTexture(generateSprite(labelText, `#${color.toString(16).padStart(6, '0')}`)),
+                transparent: true
+            });
+            const sprite = new THREE.Sprite(spriteMaterial);
+            // 偏移标签以避免与向量重合
+            sprite.position.set(end.x + 1, end.y + 1, end.z + 1);
+            sprite.scale.set(3, 3, 3); // 增大缩放以匹配清晰度
+            scene.add(sprite);
+        }
+
+        function generateSprite(text, color) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 512; // 高分辨率
+            canvas.height = 256;
+            const ctx = canvas.getContext('2d');
+            ctx.font = 'bold 60px Arial'; // 更大更粗的字体
+            ctx.fillStyle = color; // 使用传入的颜色
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(text, canvas.width / 2, canvas.height / 2); // 居中绘制
+            return canvas;
+        }
+
+        function calculateVectorOB() {
+            const xA = vectorA.x;
+            const yA = vectorA.y;
+            const zA = vectorA.z;
+            const xB = matrix[0][0] * xA + matrix[0][1] * yA + matrix[0][2] * zA;
+            const yB = matrix[1][0] * xA + matrix[1][1] * yA + matrix[1][2] * zA;
+            const zB = matrix[2][0] * xA + matrix[2][1] * yA + matrix[2][2] * zA;
+            return { x: xB * scaleFactor, y: yB * scaleFactor, z: zB * scaleFactor, xB, yB, zB };
+        }
+
+        function updateDisplay() {
+            drawAxes();
+            drawVector(
+                { x: 0, y: 0, z: 0 },
+                { x: vectorA.x * scaleFactor, y: vectorA.y * scaleFactor, z: vectorA.z * scaleFactor },
+                0x0000ff, // 蓝色
+                'A',
+                vectorA
+            );
+            const vectorB = calculateVectorOB();
+            drawVector(
+                { x: 0, y: 0, z: 0 },
+                vectorB,
+                0xff0000, // 红色
+                'B',
+                { x: vectorB.xB, y: vectorB.yB, z: vectorB.zB }
+            );
+
+            const lengthOA = Math.sqrt(vectorA.x ** 2 + vectorA.y ** 2 + vectorA.z ** 2);
+            const lengthOB = Math.sqrt(vectorB.xB ** 2 + vectorB.yB ** 2 + vectorB.zB ** 2);
+            const ratio = lengthOA > 0 ? lengthOB / lengthOA : 0;
+
+            document.getElementById('vectorsInfo').innerHTML =
+                `\\[ OA = \\left(${vectorA.x.toFixed(2)}, ${vectorA.y.toFixed(2)}, ${vectorA.z.toFixed(2)}\\right) \\]` +
+                `\\[ OB = H \\times OA = \\left(\\begin{bmatrix} ${vectorB.xB.toFixed(2)} \\\\ ${vectorB.yB.toFixed(2)} \\\\ ${vectorB.zB.toFixed(2)} \\end{bmatrix}\\right) \\]` +
+                `\\[ \\lambda = \\frac{|OB|}{|OA|} = \\frac{${lengthOB.toFixed(2)}}{${lengthOA.toFixed(2)}} = ${ratio.toFixed(2)}\\]`;
+
+            MathJax.Hub.Queue(["Typeset", MathJax.Hub]);
+        }
+
+        function updateMatrix() {
+            matrix[0][0] = parseFloat(document.getElementById('matrix11').value) || 0;
+            matrix[0][1] = parseFloat(document.getElementById('matrix12').value) || 0;
+            matrix[0][2] = parseFloat(document.getElementById('matrix13').value) || 0;
+            matrix[1][0] = parseFloat(document.getElementById('matrix21').value) || 0;
+            matrix[1][1] = parseFloat(document.getElementById('matrix22').value) || 0;
+            matrix[1][2] = parseFloat(document.getElementById('matrix23').value) || 0;
+            matrix[2][0] = parseFloat(document.getElementById('matrix31').value) || 0;
+            matrix[2][1] = parseFloat(document.getElementById('matrix32').value) || 0;
+            matrix[2][2] = parseFloat(document.getElementById('matrix33').value) || 0;
+            updateDisplay();
+        }
+
+        function setVectorAFromInputs() {
+            const ax = parseFloat(document.getElementById('inputAx').value);
+            const ay = parseFloat(document.getElementById('inputAy').value);
+            const az = parseFloat(document.getElementById('inputAz').value);
+            if (!isNaN(ax) && !isNaN(ay) && !isNaN(az)) {
+                vectorA = { x: ax, y: ay, z: az };
+                updateDisplay();
+            } else {
+                alert("请输入有效的坐标值");
+            }
+        }
+
+        document.getElementById('setCoordinates').addEventListener('click', setVectorAFromInputs);
+        document.getElementById('matrix11').addEventListener('input', updateMatrix);
+        document.getElementById('matrix12').addEventListener('input', updateMatrix);
+        document.getElementById('matrix13').addEventListener('input', updateMatrix);
+        document.getElementById('matrix21').addEventListener('input', updateMatrix);
+        document.getElementById('matrix22').addEventListener('input', updateMatrix);
+        document.getElementById('matrix23').addEventListener('input', updateMatrix);
+        document.getElementById('matrix31').addEventListener('input', updateMatrix);
+        document.getElementById('matrix32').addEventListener('input', updateMatrix);
+        document.getElementById('matrix33').addEventListener('input', updateMatrix);
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        updateDisplay();
+    </script>
+</body>
+</html>
